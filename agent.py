@@ -152,28 +152,26 @@ def summarize_with_gemini(articles: list[dict]) -> list[dict]:
     model = genai.GenerativeModel("gemini-2.0-flash")
 
     all_summarized = []
-    chunk_size = 10
     
-    # Haberleri 10'arlı gruplar halinde işleyerek input token limitini aşmayı önleyelim
-    for i in range(0, len(articles), chunk_size):
-        chunk = articles[i:i + chunk_size]
-        
-        # Makale listesini Gemini'ye gönder
-        articles_text = "\n\n".join(
-            f"[{idx+1}] Başlık: {a.get('title', '')}\nURL: {a.get('url', '')}\nİçerik: {str(a.get('snippet', ''))[:300]}"
-            for idx, a in enumerate(chunk)
+    # Haberleri tek tek işleyerek RPM (dakikada 15 istek) limitini aşmayı önleyelim
+    for i, article in enumerate(articles):
+        # Yalnızca 1 makale gönder
+        articles_text = (
+            f"[1] Başlık: {article.get('title', '')}\n"
+            f"URL: {article.get('url', '')}\n"
+            f"İçerik: {str(article.get('snippet', ''))[:300]}"
         )
 
-        prompt = f"""Aşağıdaki haber listesini incele. Görevin:
-1. Yalnızca savunma sanayii, askeri teknoloji veya yapay zeka entegrasyonuyla DOĞRUDAN ilgili olanları seç.
-2. Her seçilen haber için 2-3 cümlelik Türkçe bir özet yaz.
+        prompt = f"""Aşağıdaki haberi incele. Görevin:
+1. Yalnızca savunma sanayii, askeri teknoloji veya yapay zeka entegrasyonuyla DOĞRUDAN ilgiliyse seç. İlgisizse boş bir JSON dizisi ([]) döndür.
+2. Eğer ilgiliyse, 2-3 cümlelik Türkçe bir özet yaz.
 3. Önemine göre YÜKSEK / ORTA / DÜŞÜK etiketle.
 4. Sonucu JSON dizisi olarak döndür — başka hiçbir şey yazma.
 
 Format:
 [
   {{
-    "index": <orijinal numara>,
+    "index": 1,
     "title": "<başlık>",
     "url": "<url>",
     "summary": "<2-3 cümle Türkçe özet>",
@@ -181,47 +179,51 @@ Format:
   }}
 ]
 
-Haberler:
+Eğer haber ilgisizse SADECE bunu döndür:
+[]
+
+Haber:
 {articles_text}
 """
 
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = model.generate_content(prompt)
-            
-                raw = response.text.strip()
-                # JSON bloğunu temizle
-                if "```" in raw:
-                    # Kod bloğunu (```json ... ```) bul ve içindekini al
-                    parts = raw.split("```")
-                    if len(parts) >= 3:
-                        raw = parts[1]
-                    if raw.lower().startswith("json"):
-                        raw = raw[4:]
-                raw = raw.strip()
-                
-                try:
-                    parsed = json.loads(raw)
-                    all_summarized.extend(parsed)
-                except json.JSONDecodeError:
-                    print("[Gemini] JSON parse hatası, ham yanıt:", raw[:200])
-                    
-                # Başarılı olursa deneme döngüsünü kır
-                break
-                
-            except ResourceExhausted as e:
-                wait_time = 20 * (attempt + 1)
-                print(f"[Gemini] Kota aşıldı (429). {wait_time} saniye bekleniyor... (Deneme {attempt+1}/{max_retries})")
-                time.sleep(wait_time)
-            except Exception as e:
-                print(f"[Gemini] Beklenmeyen API hatası: {e}")
-                break
+        try:
+            print(f"[Gemini] İşleniyor ({i+1}/{len(articles)}): {article.get('title', '')[:40]}...")
+            response = model.generate_content(prompt)
         
-        # API'nin RPM (dakika başı istek) limitlerine takılmamak için sorgular arasına bekleme ekleyelim
-        if i + chunk_size < len(articles):
-            print("[Gemini] Limitleri korumak için 15 saniye bekleniyor...")
-            time.sleep(15)
+            raw = response.text.strip()
+            # JSON bloğunu temizle
+            if "```" in raw:
+                # Kod bloğunu (```json ... ```) bul ve içindekini al
+                parts = raw.split("```")
+                if len(parts) >= 3:
+                    raw = parts[1]
+                if raw.lower().startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+            
+            try:
+                parsed = json.loads(raw)
+                
+                # Sadece doğru JSON listesi döndürüldüyse ve içeriği varsa ekle
+                if isinstance(parsed, list) and len(parsed) > 0 and "summary" in parsed[0]:
+                    # Orijinal başlık ve URL'yi koruyalım (Gemini bazen kaybedebiliyor)
+                    summary_obj = parsed[0]
+                    summary_obj["title"] = article.get('title', '')
+                    summary_obj["url"] = article.get('url', '')
+                    all_summarized.append(summary_obj)
+                    
+            except json.JSONDecodeError:
+                print("[Gemini] JSON parse hatası, ham yanıt:", raw[:200])
+                
+        except ResourceExhausted:
+            print("[Gemini] Kota aşıldı (429). Bu haber atlanıyor...")
+        except Exception as e:
+            print(f"[Gemini] Beklenmeyen API hatası: {e}")
+            
+        # 15 RPM limitine takılmamak için her istekten sonra 5 saniye bekle
+        # (Dakikada en fazla 12 istek gönderilmiş olur)
+        if i < len(articles) - 1:
+            time.sleep(5)
 
     return all_summarized
 
