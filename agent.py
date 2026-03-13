@@ -28,14 +28,9 @@ SENT_CACHE_FILE = Path("sent_hashes.json")   # daha önce gönderilenler
 
 # Arama sorguları — dilden bağımsız
 QUERIES = [
-    "artificial intelligence defense industry integration",
-    "AI military trials experiments",
-    "yapay zeka savunma sanayii entegrasyon",
-    "yapay zeka askeri denemeler",
-    "defense AI autonomous systems",
-    "AI weapons systems development",
-    "savunma yapay zeka otonom sistemler",
-    "NATO AI defense technology",
+    '(AI OR "artificial intelligence" OR autonomous OR unmanned) (site:janes.com OR site:defensenews.com OR site:breakingdefense.com OR site:twz.com OR site:navalnews.com) when:2d',
+    '(AI OR "artificial intelligence" OR autonomous OR unmanned) (site:ukdefencejournal.org.uk OR site:opex360.com OR site:defence24.com OR site:edrmagazine.eu OR site:esut.de) when:2d',
+    '(AI OR "artificial intelligence" OR autonomous OR unmanned) (site:thediplomat.com OR site:scmp.com OR site:idrw.org OR site:israeldefense.co.il OR site:tass.com) when:2d'
 ]
 
 # ── Yardımcı: gönderilmiş haber önbelleği ────────────────────────────────────
@@ -220,10 +215,8 @@ Haber:
         except Exception as e:
             print(f"[Gemini] Beklenmeyen API hatası: {e}")
             
-        # 15 RPM limitine takılmamak için her istekten sonra 5 saniye bekle
-        # (Dakikada en fazla 12 istek gönderilmiş olur)
-        if i < len(articles) - 1:
-            time.sleep(5)
+        # 429 hatasını önlemek için her makaleden sonra 10 saniye bekle
+        time.sleep(10)
 
     return all_summarized
 
